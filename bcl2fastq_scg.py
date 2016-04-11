@@ -15,7 +15,8 @@ from Bio.Seq import Seq
 
 class FlowcellLane:
     
-    def __init__(self, run_name, lane_index, bcl2fastq_version, lims_url, lims_token, year, month):
+    def __init__(self, run_name, lane_index, bcl2fastq_version, lims_url, lims_token, year, month,
+                 rev_complement=True):
 
         # For not just get/put everything in properties
         #self.lane_project_dxid = self.properties['lane_project_dxid']
@@ -26,6 +27,7 @@ class FlowcellLane:
         self.bcl2fastq_version = bcl2fastq_version
         self.year = year
         self.month = month
+        self.rev_complement = rev_complement
         
         self.sample_sheet = None
         self.use_bases_mask = None
@@ -51,13 +53,19 @@ class FlowcellLane:
         '''
 
         ## Create samplesheet
-        program_path = '/srv/gsfs0/software/gbsc/scgpm_lims/current/scgpm_lims/scripts/create_sample_sheet.py'
-        command = 'python %s -r %s -t %s -u %s -b %d -l %d' % (program_path, self.run_name, self.lims_token, self.lims_url, self.bcl2fastq_version, self.lane_index)
-        stdout,stderr = self._createSubprocess(cmd=command, pipeStdout=True)
-        self.sample_sheet = '%s_L%d_samplesheet.csv' % (self.run_name, self.lane_index)
-        stdout_elements = stdout.split()
-        self.sample_sheet = stdout_elements[1]
-        print 'This is the self.sample_sheet: %s' % self.sample_sheet
+        sample_sheet = '%s_L%s_samplesheet.csv' % (self.run_name, self.lane_index)
+        if os.path.exists(sample_sheet):
+            self.sample_sheet = sample_sheet
+            print 'Sample sheet %s already exists. Skipping creation.' % sample_sheet
+            return sample_sheet
+        else:
+            program_path = '/srv/gsfs0/software/gbsc/scgpm_lims/current/scgpm_lims/scripts/create_sample_sheet.py'
+            command = 'python %s -r %s -t %s -u %s -b %d -l %d' % (program_path, self.run_name, self.lims_token, self.lims_url, self.bcl2fastq_version, self.lane_index)
+            stdout,stderr = self._createSubprocess(cmd=command, pipeStdout=True)
+            self.sample_sheet = '%s_L%d_samplesheet.csv' % (self.run_name, self.lane_index)
+            stdout_elements = stdout.split()
+            self.sample_sheet = stdout_elements[1]
+            print 'This is the sample_sheet: %s' % self.sample_sheet
         
     def get_use_bases_mask(self):
         '''
@@ -89,8 +97,16 @@ class FlowcellLane:
         '''
 
         self.output_dir = 'Unaligned_L%d' % self.lane_index
-        command = 'bcl2fastq --output-dir %s --sample-sheet %s --barcode-mismatches %d --use-bases-mask %d:%s' % (
-            self.output_dir, self.sample_sheet, 1, int(self.lane_index), self.use_bases_mask)
+        
+        command = 'bcl2fastq '
+        command += '--output-dir %s ' % self.output_dir
+        command += '--sample-sheet %s ' % self.sample_sheet
+        command += '--barcode-mismatches %d ' % 1
+        command += '--use-bases-mask %d:%s ' % (int(self.lane_index), self.use_bases_mask)
+        command += '--ignore-missing-bcls '
+        command += '--ignore-missing-filter '
+        command += '--ignore-missing-positions'
+
         stdout,stderr = self._createSubprocess(cmd=command, pipeStdout=True)
 
     def publish_fastqs(self, run_dir, pub_run_dir):
@@ -192,8 +208,11 @@ class FlowcellLane:
             read = elements[5]
 
             # Need to use reverse complement of second barcode
-            rev_complement = self._reverse_complement(barcodes[1])
-            new_barcodes = [barcodes[0], rev_complement]
+            if self.rev_complement == True:
+                rev_complement = self._reverse_complement(barcodes[1])
+                new_barcodes = [barcodes[0], rev_complement]
+            elif self.rev_complement == False:
+                new_barcodes = [barcodes[0], barcodes[1]]
 
             lane_index_match = re.match(r'lane(\d)', lane)
             if lane_index_match:
@@ -304,7 +323,11 @@ def main():
     parser.add_argument('--lims_token', '-t', dest='lims_token', required=True, type=str)
     parser.add_argument('--year', '-y', dest='year', required=True, type=int)
     parser.add_argument('--month', '-m', dest='month', required=True, type=str)
+    parser.add_argument('--no_reverse_complement', '-n', dest='rev_complement', action='store_false', required=False)
     args = parser.parse_args()
+
+    print 'Performing bcl2fastq conversion & demultiplexing with arguments:\n'
+    print args
 
     if not len(sys.argv) > 1:
         parser.print_help()
@@ -316,7 +339,7 @@ def main():
     pub_run_dir = pub_runs_dir + '/' + str(args.year) + '/' + args.month + '/' + args.run_name
     os.chdir(run_dir)
 
-    lane = FlowcellLane(args.run_name, args.lane_index, args.bcl2fastq_version, args.lims_url, args.lims_token, args.year, args.month)
+    lane = FlowcellLane(args.run_name, args.lane_index, args.bcl2fastq_version, args.lims_url, args.lims_token, args.year, args.month, args.rev_complement)
     lane.describe()
     print 'Creating sample sheet\n'             # Tested
     sample_sheet = lane.create_sample_sheet()
